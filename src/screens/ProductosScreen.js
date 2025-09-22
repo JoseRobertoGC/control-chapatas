@@ -180,7 +180,7 @@ export default function ProductosScreen() {
 
   const renderItem = ({ item }) => (
     <View style={styles.card}>
-      <Image source={getImageSource(item.image)} style={styles.cardImg} />
+      <Image source={getImageSource(item.image?.url || item.image)} style={styles.cardImg} />
       <View style={{ flex: 1 }}>
         <Text style={styles.cardTitle}>{item.name}</Text>
         <Text style={styles.cardSubtitle}>Precio: ${item.price.toFixed(2)}</Text>
