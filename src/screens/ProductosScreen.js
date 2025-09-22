@@ -6,6 +6,7 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import { useInventory } from '../context/InventoryContext';
 
+
 // Mapa de imágenes locales (solo default)
 const assets = {
   chapata: require('../../assets/chapata.png'),
@@ -59,6 +60,21 @@ const uploadToCloudinary = async (imageUri) => {
   }
 };
 
+const deleteFromCloudinary = async (publicId) => {
+  try {
+    const res = await fetch("https://control-chapatas.vercel.app/api/deleteImage", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ publicId }),
+    });
+
+    const data = await res.json();
+    console.log("🗑️ Cloudinary delete:", data);
+    return data;
+  } catch (err) {
+    console.error("❌ Error borrando en Cloudinary:", err);
+  }
+};
 
 export default function ProductosScreen() {
   const { products, addProduct, updateProduct, removeProduct } = useInventory();
@@ -66,6 +82,7 @@ export default function ProductosScreen() {
   const [formOpen, setFormOpen] = useState(false);
   const [mode, setMode] = useState('add');
   const [editingId, setEditingId] = useState(null);
+  const [oldPublicId, setOldPublicId] = useState(null);
   const [form, setForm] = useState({ name: '', price: '', image: null });
 
   const openAdd = () => {
@@ -78,10 +95,11 @@ export default function ProductosScreen() {
   const openEdit = (p) => {
     setMode('edit');
     setEditingId(p.id);
+    setOldPublicId(p.publicId || null);
     setForm({
       name: p.name,
       price: String(p.price),
-      image: p.image || null
+      image: p.image?.url || p.image || null,
     });
     setFormOpen(true);
   };
@@ -108,8 +126,9 @@ export default function ProductosScreen() {
 
   const uploadImageIfNeeded = async (image) => {
     if (!image) return null;
-    if (image.startsWith("http")) return image;
-    return await uploadToCloudinary(image);
+    if (typeof image === "object" && image.url) return image; // ya viene Cloudinary
+    if (typeof image === "string" && image.startsWith("http")) return { url: image, publicId: null };
+    return await uploadToCloudinary(image); // retorna {url, publicId}
   };
 
   const submit = async () => {
@@ -117,19 +136,25 @@ export default function ProductosScreen() {
     if (form.price === '' || isNaN(Number(form.price))) return Alert.alert('Precio inválido');
 
     try {
-      const imageUrl = await uploadImageIfNeeded(form.image);
+      let newImageData = await uploadImageIfNeeded(form.image);
 
-      if (mode === 'add') {
-        await addProduct({
-          name: form.name.trim(),
-          price: Number(form.price),
-          image: imageUrl || null
-        });
-      } else {
+      if (mode === 'edit') {
+        // 👇 si se cambió la imagen, borrar la vieja en Cloudinary
+        if (newImageData && oldPublicId && newImageData.url !== form.image) {
+          await deleteFromCloudinary(oldPublicId);
+        }
         await updateProduct(editingId, {
           name: form.name.trim(),
           price: Number(form.price),
-          image: imageUrl || form.image
+          image: newImageData || form.image,
+          publicId: newImageData?.publicId || oldPublicId || null,
+        });
+      } else {
+        await addProduct({
+          name: form.name.trim(),
+          price: Number(form.price),
+          image: newImageData,
+          publicId: newImageData?.publicId || null,
         });
       }
       setFormOpen(false);
@@ -139,10 +164,17 @@ export default function ProductosScreen() {
     }
   };
 
-  const confirmDelete = (id) => {
+  const confirmDelete = (p) => {
     Alert.alert('Eliminar producto', '¿Deseas eliminar el producto del inventario?', [
       { text: 'Cancelar', style: 'cancel' },
-      { text: 'Eliminar', style: 'destructive', onPress: () => removeProduct(id) },
+      {
+        text: 'Eliminar', style: 'destructive', onPress: async () => {
+          if (p.publicId) {
+            await deleteFromCloudinary(p.publicId); // 👈 borramos imagen primero
+          }
+          removeProduct(p.id);
+        }
+      },
     ]);
   };
 
