@@ -18,7 +18,9 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Falta el publicId" });
     }
 
-    const result = await cloudinary.uploader.destroy(publicId);
+    const result = await cloudinary.uploader.destroy(publicId, {
+        resource_type: "image"
+      });
     console.log("🗑️ Imagen borrada:", result);
 
     return res.status(200).json({ success: true, result });
