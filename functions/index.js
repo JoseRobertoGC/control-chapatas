@@ -12,16 +12,18 @@ export default async function handler(req, res) {
   }
 
   try {
-    let body = req.body;
-
-    // Si body viene como string (caso Postman/Vercel)
-    if (typeof body === "string") {
-      try {
-        body = JSON.parse(body);
-      } catch {
-        return res.status(400).json({ error: "El body no es JSON válido" });
-      }
-    }
+    // 👇 aquí parseamos el body correctamente
+    const body = typeof req.body === "object" ? req.body : await new Promise((resolve, reject) => {
+      let data = "";
+      req.on("data", chunk => { data += chunk; });
+      req.on("end", () => {
+        try {
+          resolve(JSON.parse(data || "{}"));
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
 
     const { publicId } = body;
 
