@@ -1,0 +1,324 @@
+// src/context/InventoryContext.js
+import React, { createContext, useContext, useMemo, useState, useEffect } from "react";
+import { Alert } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { collection, addDoc } from "firebase/firestore";
+import { db } from "../firebase/firebaseConfig";
+
+const InventoryContext = createContext(null);
+
+const DEFAULT_PRODUCTS = [
+  { id: 'chapata', name: 'Chapata', price: 35, image: { type: 'asset', name: 'chapata' } },
+  { id: 'sandwich', name: 'Sándwich', price: 42, image: { type: 'asset', name: 'sandwich' } },
+];
+
+export function InventoryProvider({ children }) {
+  const [products, setProducts] = useState(DEFAULT_PRODUCTS);
+  const [point, setPointState] = useState(null);
+  const [stock, setStock] = useState({
+    A: { chapata: 0, sandwich: 0 },
+    B: { chapata: 0, sandwich: 0 },
+  });
+  const [sales, setSales] = useState([]);
+  const [transfers, setTransfers] = useState([]);
+  const [ventaIniciada, setVentaIniciada] = useState(false);
+  const [registroActual, setRegistroActual] = useState(null);
+
+  // ---------- Helpers de persistencia ----------
+  const persistState = async (key, value) => {
+    try {
+      await AsyncStorage.setItem(key, JSON.stringify(value));
+    } catch (error) {
+      console.error("Error guardando en AsyncStorage:", key, error);
+    }
+  };
+
+  // ---------- Setters persistentes ----------
+  const setPoint = async (p) => {
+    setPointState(p);
+    await AsyncStorage.setItem("point", p);
+  };
+
+  const setInitialStock = ({ A, B }) => {
+    const newStock = {
+      A: {},
+      B: {},
+    };
+  
+    // Para cada producto registrado en `products`
+    products.forEach((p) => {
+      newStock.A[p.id] = Number(A[p.id]) || 0;
+      newStock.B[p.id] = Number(B[p.id]) || 0;
+    });
+  
+    setStock(newStock);
+    persistState("stock", newStock);
+  };
+  
+
+  // ---------- Registro ----------
+  const iniciarRegistro = () => {
+    const fechaHoy = new Date().toISOString().split("T")[0];
+    const nuevoRegistro = {
+      fecha: fechaHoy,
+      totalVenta: 0,
+      inventarioFinal: {},
+      ventas: {},
+      traspasos: [],
+      sincronizado: false,
+    };
+    setRegistroActual(nuevoRegistro);
+    AsyncStorage.setItem("registroActual", JSON.stringify(nuevoRegistro));
+    setVentaIniciada(true);
+    AsyncStorage.setItem("ventaIniciada", "true");
+  };
+
+  const aggregateSales = (ventas) => {
+    const result = {};
+    ventas.forEach(({ point, product, qty }) => {
+      if (!result[point]) result[point] = {};
+      if (!result[point][product]) result[point][product] = 0;
+      result[point][product] += qty;
+    });
+    return result;
+  };
+
+  const precios = {
+    chapata: 35,
+    sandwich: 45,
+  };
+
+  const calcularTotal = (ventas) =>
+    ventas.reduce((acc, { product, qty }) => {
+      const prod = products.find((p) => p.id === product);
+      return acc + (prod?.price || 0) * qty;
+    }, 0);
+
+  const finalizarVenta = async () => {
+    const final = {
+      ...registroActual,
+      ventas: aggregateSales(sales),
+      traspasos: transfers,
+      inventarioFinal: stock,
+      totalVenta: calcularTotal(sales),
+      createdAt: new Date().toISOString(),
+      sincronizado: false,
+    };
+
+    try {
+      await addDoc(collection(db, "registros"), final);
+      console.log("Registro guardado en Firebase ✅");
+    } catch (error) {
+      console.error("Error subiendo registro ❌", error);
+    }
+
+    const existentes = JSON.parse(
+      (await AsyncStorage.getItem("registros")) || "[]"
+    );
+    await AsyncStorage.setItem(
+      "registros",
+      JSON.stringify([...existentes, final])
+    );
+
+    await resetInventory();
+  };
+
+  const resetInventory = async () => {
+    await AsyncStorage.multiRemove([
+      "stock",
+      "sales",
+      "transfers",
+      "registroActual",
+    ]);
+  
+    await AsyncStorage.setItem("ventaIniciada", "false");
+  
+    setStock({ A: {}, B: {} });
+    setVentaIniciada(false);
+    setSales([]);
+    setTransfers([]);
+    setRegistroActual(null);
+  };
+  
+
+  const checkIfVentaTerminada = () => {
+    const total = Object.values(stock)
+      .flatMap((p) => Object.values(p))
+      .reduce((a, b) => a + b, 0);
+
+    if (total === 0 && ventaIniciada) {
+      Alert.alert("Venta terminada", "Ya no quedan productos para vender", [
+        {
+          text: "Aceptar",
+          onPress: async () => {
+            await finalizarVenta();
+            await AsyncStorage.setItem("reiniciarApp", "true");
+          },
+        },
+      ]);
+    }
+  };
+
+  // ---------- Operaciones ----------
+  const sell = (product, qty = 1) => {
+    qty = Number(qty) || 0;
+    if (qty <= 0) return false;
+
+    const current = stock[point][product];
+    if (current < qty) {
+      const prod = products.find(p => p.id === product);
+      const nombre = prod ? prod.name : product;
+      Alert.alert(
+        "Inventario insuficiente",
+        `No hay suficientes ${nombre}s en el Punto ${point}.`
+      );
+      return false;
+    }
+
+    const updatedStock = {
+      ...stock,
+      [point]: {
+        ...stock[point],
+        [product]: stock[point][product] - qty,
+      },
+    };
+    setStock(updatedStock);
+    persistState("stock", updatedStock);
+
+    const newSales = [...sales, { point, product, qty, ts: Date.now() }];
+    setSales(newSales);
+    persistState("sales", newSales);
+
+    return true;
+  };
+
+  const transfer = (product, qty = 1, to) => {
+    qty = Number(qty) || 0;
+    if (qty <= 0) return;
+
+    const from = point;
+    if (to === from) {
+      Alert.alert("Traspaso inválido", "El destino debe ser el otro punto.");
+      return;
+    }
+
+    if (stock[from][product] < qty) {
+      const prod = products.find(p => p.id === product);
+      const nombre = prod ? prod.name : product;
+      Alert.alert(
+        "Inventario insuficiente",
+        `No hay suficientes ${nombre}s en el Punto ${from}.`
+      );
+      return;
+    }
+
+    const updatedStock = {
+      ...stock,
+      [from]: { ...stock[from], [product]: stock[from][product] - qty },
+      [to]: { ...stock[to], [product]: stock[to][product] + qty },
+    };
+    setStock(updatedStock);
+    persistState("stock", updatedStock);
+
+    const newTransfers = [
+      ...transfers,
+      { from, to, product, qty, ts: Date.now() },
+    ];
+    setTransfers(newTransfers);
+    persistState("transfers", newTransfers);
+  };
+
+  // ---------- Restaurar al inicio ----------
+  
+
+  useEffect(() => {
+    const loadAsyncData = async () => {
+      try {
+        const savedPoint = await AsyncStorage.getItem("point");
+        const venta = await AsyncStorage.getItem("ventaIniciada");
+        const savedStock = await AsyncStorage.getItem("stock");
+        const savedSales = await AsyncStorage.getItem("sales");
+        const savedTransfers = await AsyncStorage.getItem("transfers");
+        const savedRegistro = await AsyncStorage.getItem("registroActual");
+        const savedProducts = await AsyncStorage.getItem('products');
+        if(savedProducts) {
+          setProducts(JSON.parse(savedProducts));
+        } else {
+          await AsyncStorage.setItem('products', JSON.stringify(DEFAULT_PRODUCTS));
+        }
+
+        if (savedPoint) setPointState(savedPoint);
+        if (venta === "true") setVentaIniciada(true);
+        if (savedStock) setStock(JSON.parse(savedStock));
+        if (savedSales) setSales(JSON.parse(savedSales));
+        if (savedTransfers) setTransfers(JSON.parse(savedTransfers));
+        if (savedRegistro) setRegistroActual(JSON.parse(savedRegistro));
+      } catch (error) {
+        console.error("Error cargando AsyncStorage:", error);
+      }
+    };
+
+    loadAsyncData();
+  }, []);
+
+  const addProduct = async ({ name, price, image }) => {
+    const id = Date.now().toString(); // simple id
+    const next = [...products, { id, name, price: Number(price) || 0, image }];
+    setProducts(next);
+    await AsyncStorage.setItem('products', JSON.stringify(next));
+    return id;
+  };
+
+  const updateProduct = async (id, patch) => {
+    const next = products.map(p => (p.id === id ? { ...p, ...patch, price: patch.price != null ? Number(patch.price) : p.price } : p));
+    setProducts(next);
+    await AsyncStorage.setItem('products', JSON.stringify(next));
+  };
+
+  const removeProduct = async (id) => {
+    const next = products.filter(p => p.id !== id);
+    setProducts(next);
+    await AsyncStorage.setItem('products', JSON.stringify(next));
+  };
+
+  // ---------- Context Value ----------
+  const value = useMemo(
+    () => ({
+      point,
+      setPoint,
+      stock,
+      sales,
+      transfers,
+      ventaIniciada,
+      setVentaIniciada,
+      setInitialStock,
+      sell,
+      transfer,
+      resetInventory,
+      registroActual,
+      setRegistroActual,
+      iniciarRegistro,
+      finalizarVenta,
+      checkIfVentaTerminada,
+      setStock,
+      products,
+      addProduct,
+      updateProduct,
+      removeProduct,
+    }),
+    [point, stock, sales, transfers, ventaIniciada, registroActual, products]
+  );
+
+  return (
+    <InventoryContext.Provider value={value}>
+      {children}
+    </InventoryContext.Provider>
+  );
+}
+
+export function useInventory() {
+  const ctx = useContext(InventoryContext);
+  if (!ctx)
+    throw new Error("useInventory must be used within InventoryProvider");
+  return ctx;
+}

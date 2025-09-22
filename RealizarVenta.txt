@@ -1,0 +1,468 @@
+import React, { useState, useEffect } from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  Image,
+  TextInput,
+  TouchableOpacity,
+  FlatList,
+  Alert,
+  Pressable,
+  Modal,
+} from "react-native";
+import { useInventory } from "../context/InventoryContext";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useNavigation } from "@react-navigation/native";
+
+const assets = {
+  chapata: require("../../assets/chapata.png"),
+  sandwich: require("../../assets/sandwich.png"),
+};
+
+const getImageSource = (image) => {
+  if (!image) return null;
+  if (image.type === "uri") return { uri: image.uri };
+  if (image.type === "asset" && assets[image.name]) return assets[image.name];
+  return null;
+};
+
+export default function RealizarVentaScreen() {
+  const { point, stock, sell, checkIfVentaTerminada, products } =
+    useInventory();
+  const navigation = useNavigation();
+
+  const [orden, setOrden] = useState([]); // productos seleccionados
+  const [cantidades, setCantidades] = useState({});
+
+  const [modalVisible, setModalVisible] = useState(false);
+  const [productoEliminar, setProductoEliminar] = useState(null);
+
+  const agregarProducto = (producto) => {
+    const qty = parseInt(cantidades[producto.id]) || 1;
+    const disponibles = stock[point]?.[producto.id] ?? 0;
+
+    if (qty <= 0) {
+      Alert.alert("Cantidad inválida", "Debe ser mayor a 0");
+      return;
+    }
+
+    const ventaExitosa = sell(producto.id, qty);
+    if (!ventaExitosa) return;
+
+    const subtotalNuevo = qty * producto.price;
+
+    setOrden((prev) => {
+      const index = prev.findIndex((item) => item.id === producto.id);
+
+      if (index !== -1) {
+        // Ya existe: actualizar cantidad y subtotal
+        const nuevaOrden = [...prev];
+        const existente = nuevaOrden[index];
+        const nuevaCantidad = existente.cantidad + qty;
+        nuevaOrden[index] = {
+          ...existente,
+          cantidad: nuevaCantidad,
+          subtotal: nuevaCantidad * producto.price,
+        };
+        return nuevaOrden;
+      } else {
+        // Nuevo producto en la orden
+        return [
+          ...prev,
+          {
+            id: producto.id,
+            nombre: producto.name,
+            cantidad: qty,
+            subtotal: subtotalNuevo,
+            precio: producto.price,
+          },
+        ];
+      }
+    });
+
+    setCantidades((prev) => ({ ...prev, [producto.id]: "1" }));
+  };
+
+  const totalOrden = orden.reduce((acc, item) => acc + item.subtotal, 0);
+
+  const { setStock } = useInventory();
+
+  const eliminarProducto = () => {
+    if (!productoEliminar) return;
+
+    // Restaurar inventario sumando lo que se quitó de la orden
+    setStock((prev) => ({
+      ...prev,
+      [point]: {
+        ...prev[point],
+        [productoEliminar.id]:
+          prev[point][productoEliminar.id] + productoEliminar.cantidad,
+      },
+    }));
+
+    // Quitar el producto de la orden
+    setOrden((prevOrden) =>
+      prevOrden.filter((item) => item.id !== productoEliminar.id)
+    );
+
+    setProductoEliminar(null);
+    setModalVisible(false);
+  };
+
+  const { resetInventory } = useInventory();
+  const resetApp = async () => {
+    try {
+      await AsyncStorage.clear(); // Borra datos persistentes
+      resetInventory(); // Borra el estado del contexto (memoria)
+      Alert.alert("Reiniciado", "Los datos han sido borrados");
+      navigation.replace("Splash"); // Reinicia navegación desde cero
+    } catch (error) {
+      console.error("Error al resetear la app:", error);
+    }
+  };
+
+  const finalizarVenta = () => {
+    Alert.alert("¡Ticket generado!", "Aquí se imprimiría el ticket");
+    setOrden([]); // limpia la orden
+    setCantidades({}); // reinicia las cantidades
+
+    setTimeout(() => {
+      checkIfVentaTerminada();
+    }, 5000);
+  };
+
+  useEffect(() => {
+    const revisarReinicio = async () => {
+      const reinicio = await AsyncStorage.getItem("reiniciarApp");
+      if (reinicio === "true") {
+        await AsyncStorage.removeItem("reiniciarApp");
+        await resetInventory();
+        navigation.replace("Splash"); // o 'VentasHome'
+      }
+    };
+
+    const intervalo = setInterval(revisarReinicio, 500);
+    return () => clearInterval(intervalo);
+  }, []);
+
+  return (
+    <View style={styles.container}>
+      <FlatList
+        data={products}
+        keyExtractor={(item) => item.id}
+        numColumns={2}
+        contentContainerStyle={{
+          justifyContent: "center",
+          alignItems: "center",
+          paddingBottom: 100,
+        }}
+        renderItem={({ item }) => (
+          <TouchableOpacity
+            style={styles.newCard}
+            onPress={() => agregarProducto(item)}
+          >
+            <Image
+              source={getImageSource(item.image)}
+              style={styles.newImage}
+            />
+            <Text style={styles.newTitle}>{item.name}</Text>
+            <Text style={styles.newPrice}>${item.price}</Text>
+            <Text style={styles.newStock}>
+              Disponibles: {stock[point]?.[item.id] ?? 0}
+            </Text>
+          </TouchableOpacity>
+        )}
+      />
+
+      <View style={styles.resumen}>
+        <Text style={styles.resumenTitle}>Resumen de orden</Text>
+
+        {orden.map((item, idx) => (
+          <View key={idx} style={styles.resumenRow}>
+            <Text style={styles.resumenItem}>{item.nombre}</Text>
+            <TextInput
+              style={styles.resumenInput}
+              keyboardType="numeric"
+              value={String(item.cantidad)}
+              editable={false}
+              onChangeText={(text) => {
+                const nuevaCantidad = parseInt(text) || 0;
+                setOrden((prevOrden) =>
+                  prevOrden.map((prod, i) =>
+                    i === idx
+                      ? {
+                          ...prod,
+                          cantidad: nuevaCantidad,
+                          subtotal: nuevaCantidad * prod.precio,
+                        }
+                      : prod
+                  )
+                );
+              }}
+            />
+            <TouchableOpacity
+              onPress={() => {
+                setProductoEliminar(item);
+                setModalVisible(true);
+              }}
+            >
+              <Image
+                source={require("../../assets/trash.png")}
+                style={styles.trashIcon}
+              />
+            </TouchableOpacity>
+          </View>
+        ))}
+
+        <Text style={styles.total}>TOTAL: ${totalOrden}</Text>
+
+        <TouchableOpacity style={styles.ticketBtn} onPress={finalizarVenta}>
+          <Text style={styles.ticketText}>Imprimir ticket</Text>
+        </TouchableOpacity>
+      </View>
+
+      <Modal transparent visible={modalVisible} animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Eliminar productos</Text>
+            <Text style={styles.modalText}>
+              ¿Deseas eliminar los productos agregados?
+            </Text>
+
+            <View style={styles.modalButtons}>
+              <Pressable
+                style={[styles.modalBtn, { backgroundColor: "#d32f2f" }]}
+                onPress={eliminarProducto}
+              >
+                <Text style={styles.modalBtnText}>Eliminar</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.modalBtn, { backgroundColor: "#777" }]}
+                onPress={() => setModalVisible(false)}
+              >
+                <Text style={styles.modalBtnText}>Cancelar</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: "#F4B31A",
+    padding: 16,
+  },
+  header: {
+    fontSize: 18,
+    fontWeight: "bold",
+    marginBottom: 12,
+    textAlign: "center",
+  },
+  card: {
+    flexDirection: "row",
+    backgroundColor: "#fff",
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 12,
+    alignItems: "center",
+    gap: 10,
+  },
+  image: {
+    width: 60,
+    height: 60,
+    resizeMode: "contain",
+    marginRight: 10,
+  },
+  title: {
+    fontWeight: "bold",
+    fontSize: 16,
+  },
+  info: {
+    fontSize: 14,
+    color: "#333",
+  },
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 6,
+    gap: 8,
+  },
+  input: {
+    width: 60,
+    backgroundColor: "#eee",
+    padding: 6,
+    borderRadius: 6,
+    textAlign: "right",
+  },
+  addBtn: {
+    backgroundColor: "#000",
+    marginTop: 6,
+    paddingVertical: 8,
+    borderRadius: 6,
+    alignItems: "center",
+  },
+  addText: {
+    color: "#fff",
+    fontWeight: "bold",
+  },
+  resumen: {
+    backgroundColor: "#fff",
+    padding: 16,
+    borderRadius: 10,
+    marginTop: 10,
+  },
+  resumenTitle: {
+    fontWeight: "bold",
+    fontSize: 16,
+    marginBottom: 8,
+  },
+  resumenItem: {
+    fontSize: 14,
+  },
+  total: {
+    marginTop: 10,
+    fontWeight: "bold",
+    fontSize: 25,
+    textAlign: "center",
+  },
+  ticketBtn: {
+    marginTop: 12,
+    backgroundColor: "#000",
+    paddingVertical: 10,
+    borderRadius: 6,
+    alignItems: "center",
+  },
+  ticketText: {
+    color: "#fff",
+    fontWeight: "bold",
+  },
+  resetButton: {
+    marginTop: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    backgroundColor: "#D7263D",
+    borderRadius: 6,
+    alignItems: "center",
+  },
+  resetButtonText: {
+    color: "#fff",
+    fontWeight: "bold",
+    fontSize: 16,
+  },
+  newCard: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 10,
+    marginVertical: 10,
+    marginHorizontal: 10,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 6,
+    elevation: 3,
+    width: "42%",
+    minWidth: 140,
+    maxWidth: 180,
+  },
+  newImage: {
+    width: "100%",
+    height: 120,
+    borderRadius: 10,
+    resizeMode: "cover",
+    marginBottom: 8,
+  },
+  newTitle: {
+    fontWeight: "bold",
+    fontSize: 16,
+    marginBottom: 4,
+  },
+  newPrice: {
+    fontSize: 14,
+    color: "#444",
+  },
+  newStock: {
+    fontSize: 14,
+    color: "#777",
+  },
+
+  resumenRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginVertical: 5,
+    marginHorizontal: 50,
+  },
+
+  resumenItem: {
+    fontSize: 16,
+    fontWeight: "500",
+    flex: 1,
+  },
+
+  resumenInput: {
+    backgroundColor: "#f0f0f0",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    width: 60,
+    textAlign: "center",
+    fontWeight: "600",
+  },
+
+  trashIcon: {
+    width: 25,
+    height: 25,
+    marginLeft: 10,
+    tintColor: "#d32f2f",
+  },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "#00000088",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  modalContent: {
+    backgroundColor: "#fff",
+    padding: 20,
+    borderRadius: 12,
+    width: "80%",
+    alignItems: "center",
+  },
+
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "bold",
+    marginBottom: 10,
+  },
+
+  modalText: {
+    fontSize: 15,
+    marginBottom: 20,
+    textAlign: "center",
+  },
+
+  modalButtons: {
+    flexDirection: "row",
+    gap: 10,
+  },
+
+  modalBtn: {
+    flex: 1,
+    padding: 12,
+    borderRadius: 6,
+    alignItems: "center",
+  },
+
+  modalBtnText: {
+    color: "#fff",
+    fontWeight: "bold",
+  },
+});

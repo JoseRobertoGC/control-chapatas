@@ -1,0 +1,185 @@
+import React, { useMemo, useState } from 'react';
+import { View, Text, StyleSheet, FlatList, Image, TouchableOpacity, Modal, TextInput, Pressable, Alert } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+import { useInventory } from '../context/InventoryContext';
+
+// Mapa para resolver assets por nombre
+const assets = {
+  chapata: require('../../assets/chapata.png'),
+  sandwich: require('../../assets/sandwich.png'),
+};
+
+const getImageSource = (image) => {
+  if (!image) return null;
+  if (image.type === 'uri') return { uri: image.uri };
+  if (image.type === 'asset' && assets[image.name]) return assets[image.name];
+  return null;
+};
+
+export default function ProductosScreen() {
+  const { products, addProduct, updateProduct, removeProduct } = useInventory();
+
+  const [formOpen, setFormOpen] = useState(false);
+  const [mode, setMode] = useState('add'); // 'add' | 'edit'
+  const [editingId, setEditingId] = useState(null);
+
+  const [form, setForm] = useState({ name: '', price: '', image: null });
+
+  const openAdd = () => {
+    setMode('add');
+    setEditingId(null);
+    setForm({ name: '', price: '', image: null });
+    setFormOpen(true);
+  };
+
+  const openEdit = (p) => {
+    setMode('edit');
+    setEditingId(p.id);
+    setForm({ name: p.name, price: String(p.price), image: p.image || null });
+    setFormOpen(true);
+  };
+
+  const pickImage = async () => {
+    const { granted } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!granted) {
+      Alert.alert('Permiso requerido', 'Necesito acceso a tu galería para elegir una imagen.');
+      return;
+    }
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.8 });
+    if (!res.canceled) {
+      setForm((f) => ({ ...f, image: { type: 'uri', uri: res.assets[0].uri } }));
+    }
+  };
+
+  const submit = async () => {
+    if (!form.name.trim()) return Alert.alert('Falta nombre');
+    if (form.price === '' || isNaN(Number(form.price))) return Alert.alert('Precio inválido');
+
+    if (mode === 'add') {
+      await addProduct({ name: form.name.trim(), price: Number(form.price), image: form.image });
+    } else {
+      await updateProduct(editingId, { name: form.name.trim(), price: Number(form.price), image: form.image });
+    }
+    setFormOpen(false);
+  };
+
+  const confirmDelete = (id) => {
+    Alert.alert('Eliminar producto', '¿Deseas eliminar el producto del inventario?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Eliminar', style: 'destructive', onPress: () => removeProduct(id) },
+    ]);
+  };
+
+  const renderItem = ({ item }) => (
+    <View style={styles.card}>
+      <Image source={getImageSource(item.image)} style={styles.cardImg} />
+      <View style={{ flex: 1 }}>
+        <Text style={styles.cardTitle}>{item.name}</Text>
+        <Text style={styles.cardSubtitle}>Precio: ${item.price.toFixed(2)}</Text>
+      </View>
+
+      <TouchableOpacity style={styles.iconBtn} onPress={() => openEdit(item)}>
+        <Image source={require('../../assets/edit.png')} style={styles.editIcon} />
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.iconBtn} onPress={() => confirmDelete(item.id)}>
+        <Image source={require('../../assets/trash.png')} style={styles.trashIcon} />
+      </TouchableOpacity>
+    </View>
+  );
+
+  return (
+    <View style={styles.container}>
+      <FlatList
+        data={products}
+        keyExtractor={(i) => i.id}
+        contentContainerStyle={{ paddingVertical: 8 }}
+        renderItem={renderItem}
+        ListFooterComponent={
+          <TouchableOpacity style={styles.addBtn} onPress={openAdd}>
+            <Text style={styles.addBtnText}>Agregar Producto</Text>
+          </TouchableOpacity>
+        }
+      />
+
+      {/* Modal de agregar/editar */}
+      <Modal transparent visible={formOpen} animationType="fade" onRequestClose={() => setFormOpen(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{mode === 'add' ? 'Nuevo producto' : 'Editar producto'}</Text>
+              <Pressable onPress={() => setFormOpen(false)}>
+                <Text style={styles.closeX}>✕</Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.imageRow}>
+              <TouchableOpacity onPress={pickImage} style={styles.imagePickerBox}>
+                {form.image ? (
+                  <Image source={getImageSource(form.image)} style={styles.previewImg} />
+                ) : (
+                  <Text style={{ textAlign: 'center' }}>Agregar/editar imagen</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.modalRow}>
+              <Text style={styles.label}>Nombre del producto:</Text>
+              <TextInput
+                value={form.name}
+                onChangeText={(t) => setForm((f) => ({ ...f, name: t }))}
+                style={styles.input}
+                placeholder="Ej. Café"
+              />
+            </View>
+
+            <View style={styles.modalRow}>
+              <Text style={styles.label}>Precio del producto:</Text>
+              <TextInput
+                value={String(form.price)}
+                onChangeText={(t) => setForm((f) => ({ ...f, price: t }))}
+                style={styles.input}
+                keyboardType="numeric"
+                placeholder="0"
+              />
+            </View>
+
+            <TouchableOpacity style={styles.saveBtn} onPress={submit}>
+              <Text style={styles.saveBtnText}>{mode === 'add' ? 'Agregar Producto' : 'Guardar cambios'}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#F4B31A', padding: 16 },
+  card: {
+    backgroundColor: '#fff', borderRadius: 12, padding: 12, marginBottom: 12, flexDirection: 'row', alignItems: 'center',
+  },
+  cardImg: { width: 70, height: 70, borderRadius: 8, marginRight: 12, backgroundColor: '#eee' },
+  cardTitle: { fontWeight: 'bold', fontSize: 18, color: '#000' },
+  cardSubtitle: { color: '#333', marginTop: 2 },
+  iconBtn: { padding: 8, marginLeft: 6 },
+  trashIcon: { width: 25, height: 25, marginLeft: 10, tintColor: '#d32f2f' },
+  editIcon: { width: 25, height: 25, marginLeft: 10 },
+  addBtn: { backgroundColor: '#000', paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginTop: 8 },
+  addBtnText: { color: '#fff', fontWeight: 'bold' },
+
+  modalOverlay: { flex: 1, backgroundColor: '#0008', justifyContent: 'center', alignItems: 'center' },
+  modalCard: { backgroundColor: '#fff', borderRadius: 16, padding: 16, width: '90%' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  modalTitle: { fontSize: 20, fontWeight: 'bold', color: '#000' },
+  closeX: { fontSize: 20, fontWeight: 'bold', color: '#000' },
+
+  modalRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginVertical: 8 },
+  imageRow: { flexDirection: 'row', justifyContent: 'center', marginVertical: 12 },
+  imagePickerBox: { width: 100, height: 100, borderRadius: 10, backgroundColor: '#eee', justifyContent: 'center', alignItems: 'center' },
+  previewImg: { width: 100, height: 100, borderRadius: 10 },
+  label: { fontSize: 15, color: '#000', marginRight: 10, flex: 1 },
+  input: { flex: 1.2, backgroundColor: '#eee', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8, textAlign: 'center' },
+
+  saveBtn: { marginTop: 16, backgroundColor: '#000', paddingVertical: 14, borderRadius: 10, alignItems: 'center' },
+  saveBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
+});

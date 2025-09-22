@@ -1,0 +1,46 @@
+import React, { useEffect } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { useInventory } from '../context/InventoryContext';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+export default function VentasScreen({ navigation }) {
+  const { ventaIniciada } = useInventory();
+
+  useEffect(() => {
+    // Si ya inició venta → redirige automáticamente
+    if (ventaIniciada) {
+      navigation.replace('RealizarVenta');
+    }
+  }, [ventaIniciada]);
+
+  return (
+    <View style={styles.container}>
+      <TouchableOpacity
+        style={styles.button}
+        onPress={() => navigation.navigate('InventarioInicial')}
+      >
+        <Text style={styles.buttonText}>Iniciar Venta</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F4B31A',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  button: {
+    backgroundColor: '#000',
+    paddingVertical: 16,
+    paddingHorizontal: 32,
+    borderRadius: 6,
+  },
+  buttonText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+});

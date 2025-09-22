@@ -1,0 +1,59 @@
+import React, { useEffect } from 'react';
+import { View, Text, Image, StyleSheet } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useInventory } from '../context/InventoryContext';
+
+export default function SplashScreen({ navigation }) {
+  const { setPoint, setVentaIniciada } = useInventory();
+
+  useEffect(() => {
+    const checkInitialStatus = async () => {
+      const savedPoint = await AsyncStorage.getItem('point');
+      const venta = await AsyncStorage.getItem('ventaIniciada');
+
+      setTimeout(() => {
+        if (!savedPoint) {
+          navigation.replace('SelectPoint');
+        } else {
+          setPoint(savedPoint);
+          setVentaIniciada(venta === 'true');
+
+          if (venta === 'true') {
+            navigation.replace('MainTabs', { screen: 'Ventas', params: { screen: 'RealizarVenta' } });
+          } else {
+            navigation.replace('MainTabs', { screen: 'Ventas', params: { screen: 'VentasHome' } });
+          }
+        }
+      }, 2000);
+    };
+
+    checkInitialStatus();
+  }, []);
+
+  return (
+    <View style={styles.container}>
+      <Image source={require('../../assets/logo.png')} style={styles.logo} />
+      <Text style={styles.title}>BIENVENIDO</Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F4B31A',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  logo: {
+    width: 160,
+    height: 160,
+    resizeMode: 'contain',
+    marginBottom: 20,
+  },
+  title: {
+    fontSize: 24,
+    color: '#fff',
+    fontWeight: 'bold',
+  },
+});
