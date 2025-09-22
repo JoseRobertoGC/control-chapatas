@@ -12,20 +12,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    // 👇 aquí parseamos el body correctamente
-    const body = typeof req.body === "object" ? req.body : await new Promise((resolve, reject) => {
-      let data = "";
-      req.on("data", chunk => { data += chunk; });
-      req.on("end", () => {
-        try {
-          resolve(JSON.parse(data || "{}"));
-        } catch (err) {
-          reject(err);
-        }
-      });
-    });
-
-    const { publicId } = body;
+    const { publicId } = req.body; // <-- ya viene parseado si mandas JSON
 
     if (!publicId) {
       return res.status(400).json({ error: "Falta el publicId" });
